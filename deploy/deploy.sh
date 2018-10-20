@@ -48,7 +48,6 @@ sudo mv /tmp/sudoers /etc
   echo "done!"
 }
 
-
 function add_ssh_key() {
   echo "Adding SSH key..."
   cat "$HOME/.ssh/id_rsa.pub" | ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
@@ -96,20 +95,6 @@ function docker_pull () {
   echo "done!"
 }
 
-function provision_server () {
-  configure_sudo
-  echo "---"
-  add_ssh_key
-  echo "---"
-  configure_secure_ssh
-  echo "---"
-  install_docker ${1}
-  echo "---"
-  docker_pull
-  echo "---"
-  git_init
-}
-
 function git_init () {
   echo "Initialize git repo and hooks..."
   scp "git/post-receive/mobydock" "${SSH_USER}@${SERVER_IP}:/tmp/mobydock"
@@ -126,9 +111,37 @@ sudo chown ${SSH_USER}:${SSH_USER} -R /var/git/mobydock.git /var/git/mobydock
   echo "done!"
 }
 
+function configure_firewall () {
+  echo "Configuring iptables firewall..."
+  scp "iptables/rules-save" "${SSH_USER}@${SERVER_IP}:/tmp/rules-save"
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo mkdir -p /var/lib/iptables
+sudo mv /tmp/rules-save /var/lib/iptables
+sudo chown root:root -R /var/lib/iptables
+  '"
+  echo "done!"
+}
+
+function provision_server () {
+  configure_sudo
+  echo "---"
+  add_ssh_key
+  echo "---"
+  configure_secure_ssh
+  echo "---"
+  install_docker ${1}
+  echo "---"
+  docker_pull
+  echo "---"
+  git_init
+  echo "---"
+  configure_firewall
+}
+
+
 function help_menu () {
 cat << EOF
-Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -a [docker_ver])
+Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -f | -a [docker_ver])
 
 ENVIRONMENT VARIABLES:
    SERVER_IP        IP address to work on, ie. staging or production
@@ -152,6 +165,7 @@ OPTIONS:
    -d|--docker               Install Docker
    -l|--docker-pull          Pull necessary Docker images
    -g|--git-init             Install and initialize git
+   -f|--firewall             Configure the iptables firewall
    -a|--all                  Provision everything except preseeding
 
 EXAMPLES:
@@ -175,6 +189,9 @@ EXAMPLES:
 
    Install and initialize git:
         $ deploy -g
+
+   Configure the iptables firewall:
+        $ deploy -f
 
    Configure everything together:
         $ deploy -a
@@ -214,6 +231,10 @@ case "${1}" in
   ;;
   -g|--git-init)
   git_init
+  shift
+  ;;
+  -f|--firewall)
+  configure_firewall
   shift
   ;;
   -a|--all)
