@@ -106,11 +106,29 @@ function provision_server () {
   install_docker ${1}
   echo "---"
   docker_pull
+  echo "---"
+  git_init
+}
+
+function git_init () {
+  echo "Initialize git repo and hooks..."
+  scp "git/post-receive/mobydock" "${SSH_USER}@${SERVER_IP}:/tmp/mobydock"
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo apt-get update && sudo apt-get install -y -q git
+sudo rm -rf /var/git/mobydock.git /var/git/mobydock
+sudo mkdir -p /var/git/mobydock.git /var/git/mobydock
+sudo git --git-dir=/var/git/mobydock.git --bare init
+
+sudo mv /tmp/mobydock /var/git/mobydock.git/hooks/post-receive
+sudo chmod +x /var/git/mobydock.git/hooks/post-receive
+sudo chown ${SSH_USER}:${SSH_USER} -R /var/git/mobydock.git /var/git/mobydock
+  '"
+  echo "done!"
 }
 
 function help_menu () {
 cat << EOF
-Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -a [docker_ver])
+Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -a [docker_ver])
 
 ENVIRONMENT VARIABLES:
    SERVER_IP        IP address to work on, ie. staging or production
@@ -133,6 +151,7 @@ OPTIONS:
    -s|--ssh                  Configure secure SSH
    -d|--docker               Install Docker
    -l|--docker-pull          Pull necessary Docker images
+   -g|--git-init             Install and initialize git
    -a|--all                  Provision everything except preseeding
 
 EXAMPLES:
@@ -153,6 +172,9 @@ EXAMPLES:
 
    Pull necessary Docker images:
         $ deploy -l
+
+   Install and initialize git:
+        $ deploy -g
 
    Configure everything together:
         $ deploy -a
@@ -188,6 +210,10 @@ case "${1}" in
   ;;
   -l|--docker-pull)
   docker_pull
+  shift
+  ;;
+  -g|--git-init)
+  git_init
   shift
   ;;
   -a|--all)
