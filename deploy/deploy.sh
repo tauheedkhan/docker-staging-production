@@ -7,6 +7,7 @@ KEY_USER="${KEY_USER:-$(whoami)}"
 DOCKER_VERSION="${DOCKER_VERSION:-1.8.3}"
 
 DOCKER_PULL_IMAGES=("postgres:9.4.5" "redis:2.8.22")
+COPY_UNIT_FILES=("iptables-restore" "swap" "postgres" "redis")
 
 
 function preseed_staging() {
@@ -122,6 +123,35 @@ sudo chown root:root -R /var/lib/iptables
   echo "done!"
 }
 
+function copy_units () {
+  echo "Copying systemd unit files..."
+  for unit in "${COPY_UNIT_FILES[@]}"
+  do
+    scp "units/${unit}.service" "${SSH_USER}@${SERVER_IP}:/tmp/${unit}.service"
+    ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo mv /tmp/${unit}.service /etc/systemd/system
+sudo chown ${SSH_USER}:${SSH_USER} /etc/systemd/system/${unit}.service
+  '"
+  done
+  echo "done!"
+}
+
+function enable_base_units () {
+  echo "Enabling base systemd units..."
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo systemctl enable iptables-restore.service
+sudo systemctl start iptables-restore.service
+sudo systemctl enable swap.service
+sudo systemctl start swap.service
+sudo systemctl enable postgres.service
+sudo systemctl start postgres.service
+sudo systemctl enable redis.service
+sudo systemctl start redis.service
+  '"
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'sudo systemctl restart docker'"
+  echo "done!"
+}
+
 function provision_server () {
   configure_sudo
   echo "---"
@@ -136,12 +166,16 @@ function provision_server () {
   git_init
   echo "---"
   configure_firewall
+  echo "---"
+  copy_units
+  echo "---"
+  enable_base_units
 }
 
 
 function help_menu () {
 cat << EOF
-Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -f | -a [docker_ver])
+Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -f | -c | -b | -a [docker_ver])
 
 ENVIRONMENT VARIABLES:
    SERVER_IP        IP address to work on, ie. staging or production
@@ -166,6 +200,8 @@ OPTIONS:
    -l|--docker-pull          Pull necessary Docker images
    -g|--git-init             Install and initialize git
    -f|--firewall             Configure the iptables firewall
+   -c|--copy--units          Copy systemd unit files
+   -b|--enable-base-units    Enable base systemd unit files
    -a|--all                  Provision everything except preseeding
 
 EXAMPLES:
@@ -192,6 +228,12 @@ EXAMPLES:
 
    Configure the iptables firewall:
         $ deploy -f
+
+   Copy systemd unit files:
+        $ deploy -c
+
+   Enable base systemd unit files:
+        $ deploy -b
 
    Configure everything together:
         $ deploy -a
@@ -235,6 +277,14 @@ case "${1}" in
   ;;
   -f|--firewall)
   configure_firewall
+  shift
+  ;;
+  -c|--copy-units)
+  copy_units
+  shift
+  ;;
+  -b|--enable-base-units)
+  enable_base_units
   shift
   ;;
   -a|--all)
