@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-REPO_NAME="mobydock"
+REPO_NAME="nginx"
 
 # Check out the newest version of the code.
 export GIT_WORK_TREE="/var/git/${REPO_NAME}"
@@ -24,5 +24,3 @@ docker stop "${REPO_NAME}"
 
 echo "Removing untagged Docker images (may take a while)"
 docker rmi $(docker images --quiet --filter "dangling=true")
-
-docker stop "nginx"

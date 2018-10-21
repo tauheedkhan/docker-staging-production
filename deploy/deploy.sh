@@ -1,13 +1,15 @@
 #!/bin/bash
 
 
+APP_ENV="${APP_ENV:-staging}"
 SERVER_IP="${SERVER_IP:-192.168.1.99}"
 SSH_USER="${SSH_USER:-$(whoami)}"
 KEY_USER="${KEY_USER:-$(whoami)}"
 DOCKER_VERSION="${DOCKER_VERSION:-1.8.3}"
 
 DOCKER_PULL_IMAGES=("postgres:9.4.5" "redis:2.8.22")
-COPY_UNIT_FILES=("iptables-restore" "swap" "postgres" "redis")
+COPY_UNIT_FILES=("iptables-restore" "swap" "postgres" "redis" "mobydock" "nginx")
+SSL_CERT_BASE_NAME="productionexample"
 
 
 function preseed_staging() {
@@ -99,15 +101,18 @@ function docker_pull () {
 function git_init () {
   echo "Initialize git repo and hooks..."
   scp "git/post-receive/mobydock" "${SSH_USER}@${SERVER_IP}:/tmp/mobydock"
+  scp "git/post-receive/nginx" "${SSH_USER}@${SERVER_IP}:/tmp/nginx"
   ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
 sudo apt-get update && sudo apt-get install -y -q git
-sudo rm -rf /var/git/mobydock.git /var/git/mobydock
-sudo mkdir -p /var/git/mobydock.git /var/git/mobydock
+sudo rm -rf /var/git/mobydock.git /var/git/mobydock /var/git/nginx.git /var/git/nginx
+sudo mkdir -p /var/git/mobydock.git /var/git/mobydock /var/git/nginx.git /var/git/nginx
 sudo git --git-dir=/var/git/mobydock.git --bare init
+sudo git --git-dir=/var/git/nginx.git --bare init
 
 sudo mv /tmp/mobydock /var/git/mobydock.git/hooks/post-receive
-sudo chmod +x /var/git/mobydock.git/hooks/post-receive
-sudo chown ${SSH_USER}:${SSH_USER} -R /var/git/mobydock.git /var/git/mobydock
+sudo mv /tmp/nginx /var/git/nginx.git/hooks/post-receive
+sudo chmod +x /var/git/mobydock.git/hooks/post-receive /var/git/nginx.git/hooks/post-receive
+sudo chown ${SSH_USER}:${SSH_USER} -R /var/git/mobydock.git /var/git/mobydock.git /var/git/mobydock /var/git/nginx.git /var/git/nginx
   '"
   echo "done!"
 }
@@ -152,6 +157,48 @@ sudo systemctl start redis.service
   echo "done!"
 }
 
+function copy_env_config_files () {
+  echo "Copying environment/config files..."
+  scp "${APP_ENV}/__init__.py" "${SSH_USER}@${SERVER_IP}:/tmp/__init__.py"
+  scp "${APP_ENV}/settings.py" "${SSH_USER}@${SERVER_IP}:/tmp/settings.py"
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo mkdir -p /home/${SSH_USER}/config
+sudo mv /tmp/__init__.py /home/${SSH_USER}/config/__init__.py
+sudo mv /tmp/settings.py /home/${SSH_USER}/config/settings.py
+sudo chown ${SSH_USER}:${SSH_USER} -R /home/${SSH_USER}/config
+  '"
+  echo "done!"
+}
+
+function copy_ssl_certs () {
+  echo "Copying SSL certificates..."
+if [[ "${APP_ENV}" == "staging" ]]; then
+  scp "nginx/certs/${SSL_CERT_BASE_NAME}.crt" "${SSH_USER}@${SERVER_IP}:/tmp/${SSL_CERT_BASE_NAME}.crt"
+  scp "nginx/certs/${SSL_CERT_BASE_NAME}.key" "${SSH_USER}@${SERVER_IP}:/tmp/${SSL_CERT_BASE_NAME}.key"
+  scp "nginx/certs/dhparam.pem" "${SSH_USER}@${SERVER_IP}:/tmp/dhparam.pem"
+else
+  scp "production/certs/${SSL_CERT_BASE_NAME}.crt" "${SSH_USER}@${SERVER_IP}:/tmp/${SSL_CERT_BASE_NAME}.crt"
+  scp "production/certs/${SSL_CERT_BASE_NAME}.key" "${SSH_USER}@${SERVER_IP}:/tmp/${SSL_CERT_BASE_NAME}.key"
+  scp "production/certs/dhparam.pem" "${SSH_USER}@${SERVER_IP}:/tmp/dhparam.pem"
+fi
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo mv /tmp/${SSL_CERT_BASE_NAME}.crt /etc/ssl/certs/${SSL_CERT_BASE_NAME}.crt
+sudo mv /tmp/${SSL_CERT_BASE_NAME}.key /etc/ssl/private/${SSL_CERT_BASE_NAME}.key
+sudo mv /tmp/dhparam.pem /etc/ssl/private/dhparam.pem
+sudo chown root:root -R /etc/ssl
+  '"
+  echo "done!"
+}
+
+function run_application () {
+  echo "Running the application..."
+  ssh -t "${SSH_USER}@${SERVER_IP}" bash -c "'
+sudo systemctl enable mobydock.service nginx.service
+sudo systemctl start mobydock.service nginx.service
+  '"
+  echo "done!"
+}
+
 function provision_server () {
   configure_sudo
   echo "---"
@@ -170,14 +217,21 @@ function provision_server () {
   copy_units
   echo "---"
   enable_base_units
+  echo "---"
+  copy_env_config_files
+  echo "---"
+  copy_ssl_certs
 }
 
 
 function help_menu () {
 cat << EOF
-Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -f | -c | -b | -a [docker_ver])
+Usage: ${0} (-h | -S | -u | -k | -s | -d [docker_ver] | -l | -g | -f | -c | -b | -e | -x | -r | -a [docker_ver])
 
 ENVIRONMENT VARIABLES:
+   APP_ENV          Environment that is being deployed to, 'staging' or 'production'
+                    Defaulting to ${APP_ENV}
+
    SERVER_IP        IP address to work on, ie. staging or production
                     Defaulting to ${SERVER_IP}
 
@@ -200,8 +254,11 @@ OPTIONS:
    -l|--docker-pull          Pull necessary Docker images
    -g|--git-init             Install and initialize git
    -f|--firewall             Configure the iptables firewall
-   -c|--copy--units          Copy systemd unit files
+   -c|--copy-units           Copy systemd unit files
    -b|--enable-base-units    Enable base systemd unit files
+   -e|--copy--environment    Copy app environment/config files
+   -x|--ssl-certs            Copy SSL certificates
+   -r|--run-app              Run the application
    -a|--all                  Provision everything except preseeding
 
 EXAMPLES:
@@ -234,6 +291,15 @@ EXAMPLES:
 
    Enable base systemd unit files:
         $ deploy -b
+
+   Copy app environment/config files:
+        $ deploy -e
+
+   Copy SSL certificates:
+        $ deploy -x
+
+   Run the application:
+        $ deploy -r
 
    Configure everything together:
         $ deploy -a
@@ -285,6 +351,18 @@ case "${1}" in
   ;;
   -b|--enable-base-units)
   enable_base_units
+  shift
+  ;;
+  -e|--copy--environment)
+  copy_env_config_files
+  shift
+  ;;
+  -x|--ssl-certs)
+  copy_ssl_certs
+  shift
+  ;;
+  -r|--run-app)
+  run_application
   shift
   ;;
   -a|--all)
