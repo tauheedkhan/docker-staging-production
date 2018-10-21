@@ -1,2 +1,3 @@
-# docker-training
-A cloud guru docker deep dive
+# Server provisioning using docker
+Automated staging and production server provisioning using docker
+
